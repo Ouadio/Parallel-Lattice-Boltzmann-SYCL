@@ -10,12 +10,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/sycl")
 
-# Prevent from build in source tree
-include(preventBuildInSource)
-
 # SYCL Related
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl -fsycl-unnamed-lambda -std=c++14 -D__SYCL_DISABLE_NAMESPACE_INLINE__=ON -Xclang -cl-mad-enable") # [-O3] for further optimizations
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl -fsycl-unnamed-lambda -std=c++14 -D__SYCL_DISABLE_NAMESPACE_INLINE__=ON -Xclang -O3 -cl-mad-enable") 
 
 # BUILD OPTIONS
 

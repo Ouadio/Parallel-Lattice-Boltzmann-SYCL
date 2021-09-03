@@ -63,7 +63,7 @@ void initialize_macroscopic_variables(const LBMParams &params,
   evs.emplace_back(q.submit([&](sycl::handler &cgh)
                             { cgh.fill<real_t>(rho, fillRho, nx * ny); }));
 
-  // uy is zero everywhere : fill 0
+  // uy is zero everywhere (right here/now only): fill 0
   const real_t fillUy = 0.0;
 
   evs.emplace_back(q.submit([&](sycl::handler &cgh)
@@ -114,14 +114,12 @@ void initialize_equilibrium(const LBMParams &params,
                                      real_t cu = 0.0;
 
                                      real_t uX = ux[index];
-                                     real_t uY = uy[index];
 
-                                     real_t usqr = 3.0 / 2 * (uX * uX + uY * uY);
+                                     real_t usqr = 3.0 / 2 * (uX * uX);
 
                                      for (int ipop = 0; ipop < npop; ++ipop)
                                      {
-                                       cu = 3 * (v[ipop * 2] * uX +
-                                                 v[ipop * 2 + 1] * uY);
+                                       cu = 3 * (v[ipop * 2] * uX);
                                        // along the for loop, data is not contiguous. Data is contiguous along x, then nx-spaced
                                        // along y, and nx*ny spaced along npop dimension
                                        fin[index + ipop * nx * ny] = rho[index] * t[ipop] * (1 + cu + 0.5 * cu * cu - usqr);
@@ -186,10 +184,10 @@ void macroscopic(const LBMParams &params,
 
                                      int index = i + nx * j;
 
-                                     double rho_tmp = 0;
-                                     double ux_tmp = 0;
-                                     double uy_tmp = 0;
-                                     double tempFin = 0.0;
+                                     real_t rho_tmp = 0.0;
+                                     real_t ux_tmp = 0.0;
+                                     real_t uy_tmp = 0.0;
+                                     real_t tempFin = 0.0;
 
                                      for (int ipop = 0; ipop < npop; ++ipop)
                                      {
@@ -238,7 +236,7 @@ void border_inflow(const LBMParams &params,
                                      int index = nx * j;
                                      // Compute velocity (for ux only, since uy = 0 everywhere)
                                      ux[index] = uLB * (1.0 + 1e-4 * sycl::sin((real_t)j / ly * 2 * M_PI));
-
+                                     uy[index] = 0.0;
                                      rho[index] = 1 / (1 - ux[index]) *
                                                   (fin[index + 3 * nxny] + fin[index + 4 * nxny] + fin[index + 5 * nxny] +
                                                    2 * (fin[index + 6 * nxny] + fin[index + 7 * nxny] + fin[index + 8 * nxny]));
@@ -470,7 +468,10 @@ void prepare_png_output(const LBMParams &params,
                                                {
                                                  size_t index = item.get_global_id();
 
-                                                 real_t uu2 = sycl::abs(ux[index]);
+                                                 real_t uX = ux[index];
+                                                 real_t uY = uy[index];
+
+                                                 real_t uu2 = sycl::sqrt(uX * uX + uY * uY);
 
                                                  u2[index] = uu2;
 
