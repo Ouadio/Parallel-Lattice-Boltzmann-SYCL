@@ -3,8 +3,7 @@
 
 // ======================================================
 // ======================================================
-void LBMParams::setup(const ConfigMap &configMap)
-{
+void LBMParams::setup(const ConfigMap &configMap) {
 
   // initialize run parameters
   maxIter = configMap.getInteger("run", "maxIter", 20000);
@@ -12,8 +11,8 @@ void LBMParams::setup(const ConfigMap &configMap)
   outImage = configMap.getBool("run", "outImage", true);
 
   // geometry
-  nx = configMap.getInteger("geometry", "nx", 1<<9);
-  ny = configMap.getInteger("geometry", "ny", 1<<7);
+  nx = configMap.getInteger("geometry", "nx", 1 << 9);
+  ny = configMap.getInteger("geometry", "ny", 1 << 7);
 
   lx = static_cast<double>(nx) - 1;
   ly = static_cast<double>(ny) - 1;
@@ -40,13 +39,8 @@ void LBMParams::setup(const ConfigMap &configMap)
 } // LBMParams::setup
 
 // ======================================================
-void LBMParams::setup(int maxIter,
-                      int outStep,
-                      int nx,
-                      int ny,
-                      double uLB,
-                      double Re)
-{
+void LBMParams::setup(int maxIter, int outStep, int nx, int ny, double uLB,
+                      double Re) {
 
   // initialize run parameters
   this->maxIter = maxIter;
@@ -82,8 +76,7 @@ void LBMParams::setup(int maxIter,
 
 // ======================================================
 // ======================================================
-void LBMParams::print()
-{
+void LBMParams::print() {
 
   printf("##########################\n");
   printf("Simulation run parameters:\n");

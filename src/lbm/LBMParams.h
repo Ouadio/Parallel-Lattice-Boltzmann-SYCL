@@ -1,14 +1,12 @@
-#ifndef LBM_PARAMS_H
-#define LBM_PARAMS_H
+#pragma once
 
-#include "utils/config/ConfigMap.h"
 #include "real_type.h"
+#include "utils/config/ConfigMap.h"
 
 /**
  * LBM Parameters (declaration)
  */
-struct LBMParams
-{
+struct LBMParams {
 
   //! dimension : 2 or 3
   static const int dim = 2;
@@ -61,16 +59,10 @@ struct LBMParams
 
   //! setup / initialization
   void setup(const ConfigMap &configMap);
-  void setup(int maxIter,
-             int outputStep,
-             int nx,
-             int ny,
-             double uLB,
+  void setup(int maxIter, int outputStep, int nx, int ny, double uLB,
              double Re);
 
   //! print parameters on screen
   void print();
 
 }; // struct LBMParams
-
-#endif // LBM_PARAMS_H

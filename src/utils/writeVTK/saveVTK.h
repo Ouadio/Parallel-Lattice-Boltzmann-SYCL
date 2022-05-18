@@ -4,6 +4,8 @@
 #include "lbm/LBMParams.h"
 
 #include "lbm/real_type.h"
+#include <math.h>
+
 
 /**
  * Host routine to save data to file (vti = VTK image format).

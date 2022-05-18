@@ -1,17 +1,16 @@
-#include <cstdlib>
-#include <string>
-#include <iostream>
-#include <chrono>
-#include <ctime>
-#include <map>
 #include "lbm/LBMSolver.h"
+#include <chrono>
+#include <cstdlib>
+#include <ctime>
+#include <iostream>
 #include <map>
+#include <string>
 
 using namespace std;
+using namespace cl;
 
-int main(int argc, char *argv[])
-{
-  std::string input_file = argc > 1 ? std::string(argv[1]) : "flowAroundCylinder.ini";
+int main(int argc, char *argv[]) {
+  string input_file = argc > 1 ? string(argv[1]) : "flowAroundCylinder.ini";
 
   ConfigMap configMap(input_file);
 
@@ -22,7 +21,9 @@ int main(int argc, char *argv[])
   params.print();
 
   // Instanciate solver class
-  LBMSolver *mySolver = new LBMSolver(params);
+  // Temporary hardcoded device selection (GPU)
+  sycl::device device = sycl::gpu_selector{}.select_device();
+  LBMSolver *mySolver = new LBMSolver(params, device);
 
   mySolver->printQueueInfo();
 
@@ -35,32 +36,38 @@ int main(int argc, char *argv[])
 
 #ifdef PROFILE
   // PRINT PROFILING RESULTS
-  std::map<std::string, double>::iterator it = mySolver->elapsedTime.begin();
+  map<string, double>::iterator it = mySolver->elapsedTime.begin();
   double totalElapsedTime = 0.0;
 
-  std::cout << "\n----------  Total elapsed time per routine  --------------" << std::endl;
-  while (it != mySolver->elapsedTime.end())
-  {
-    std::cout << it->first << " : " << it->second << std::endl;
+  cout << "\n----------  Total elapsed time per routine  --------------"
+       << endl;
+  while (it != mySolver->elapsedTime.end()) {
+    cout << it->first << " : " << it->second << endl;
     totalElapsedTime += it->second;
     it++;
   }
 
-  std::cout << "\n----------  Average elapsed time per routine  --------------" << std::endl;
+  cout << "\n----------  Average elapsed time per routine  --------------"
+       << endl;
 
   it = mySolver->elapsedTime.begin();
-  while (it != mySolver->elapsedTime.end())
-  {
-    std::cout << "Avg " << it->first << " : " << COMPUTE_AVG_ELAPSED_TIME(it->first, mySolver->elapsedTime, mySolver->repetitionCount) << std::endl;
+  while (it != mySolver->elapsedTime.end()) {
+    cout << "Avg " << it->first << " : "
+         << COMPUTE_AVG_ELAPSED_TIME(it->first, mySolver->elapsedTime,
+                                     mySolver->repetitionCount)
+         << endl;
     it++;
   }
-  std::cout << "\n--------------   Total elapsed simulation time   --------------" << std::endl;
+  cout << "\n--------------   Total elapsed simulation time   --------------"
+       << endl;
 
-  std::cout << "  " << totalElapsedTime << " ms" << std::endl;
+  cout << "  " << totalElapsedTime << " ms" << endl;
 #else
   auto end = chrono::high_resolution_clock::now();
-  double elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-  std::cout << "\nTotal Elapsed time (std::chrono) : \n   " << elapsedTime << " ms" << std::endl;
+  double elapsedTime =
+      chrono::duration_cast<chrono::milliseconds>(end - start).count();
+  cout << "\nTotal Elapsed time : \n   " << elapsedTime << " ms"
+       << endl;
 #endif
 
   delete mySolver;
