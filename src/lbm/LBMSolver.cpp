@@ -6,9 +6,7 @@
 #include <vector>
 
 #include "LBMSolver.h"
-
-#include "lbmFlowUtils.h"
-
+#include "profiling/sycl_profiler_utils.h"
 #include "writePNG/lodepng.h"
 #include "writeVTK/saveVTK.h"
 
@@ -18,186 +16,322 @@ using namespace cl;
 
 // ======================================================
 // ======================================================
-LBMSolver::LBMSolver(const LBMParams &params, sycl::device device)
-    : params(params), queue{device, [](sycl::exception_list el) {
+template<typename T> LBMSolver<T>::LBMSolver(const LBMParams<T> &params, sycl::device device)
+    : params(params), queue{device,
+                            [](sycl::exception_list el) {
                               for (auto ex : el) {
                                 std::rethrow_exception(ex);
                               }
-                            }} {
-
-  lbm_vars.AllocateVariables(params, this->queue);
-
-  // weights and velocity
-  this->t = sycl::malloc_device<real_t>(params.npop, queue);
-  this->v = sycl::malloc_device<real_t>(2 * params.npop, queue);
-
-  // // initialize variables
-  // this->lbm_vars = LBMVariables();
-
-  // Reserve memory for some vector events
-  initialize_macroscopic_variables_ev.reserve(
-      3); // 3 kernels within initialize_macroscopic_variables
-  prepare_png_output_ev.reserve(4);
-
-} // LBMSolver::LBMSolver
+                            }},
+      lbm_vars{params} {} // LBMSolver::LBMSolver
 
 // ======================================================
 // ======================================================
-LBMSolver::~LBMSolver() {
+template<typename T> void LBMSolver<T>::run() {
 
-  // weights and velocity
-  sycl::free(t, queue);
-  sycl::free(v, queue);
-
-  lbm_vars.FreeVariables(this->queue, params.outImage);
-
-} // LBMSolver::~LBMSolver
-
-// ======================================================
-// ======================================================
-void LBMSolver::initialize() {
-
-  // initialize obstacle mask array
-  init_obstacle_mask(params, lbm_vars.obstacle, queue, init_obstacle_mask_ev);
-
-  // anticipate mem-copy of weight and velocity vector for future kernel
-  // (initialize_equilibrium) enables some data transfer & computation
-  // overlapping
-  copy_v_ev = queue.submit([&](sycl::handler &cgh) {
-    cgh.memcpy(v, vHost, 2 * params.npop * sizeof(real_t));
-  });
-
-  copy_t_ev = queue.submit([&](sycl::handler &cgh) {
-    cgh.memcpy(t, tHost, params.npop * sizeof(real_t));
-  });
-
-  // initialize macroscopic velocity
-  initialize_macroscopic_variables(params, lbm_vars.rho, lbm_vars.ux,
-                                   lbm_vars.uy, queue,
-                                   initialize_macroscopic_variables_ev);
-
-  // Initialization of the populations at equilibrium
-  // with the given macroscopic variables.
-  initialize_equilibrium(params, v, t, lbm_vars.rho, lbm_vars.ux, lbm_vars.uy,
-                         lbm_vars.fin, queue, initialize_equilibrium_ev);
-
-  initialize_equilibrium_ev.wait({copy_v_ev});
-  initialize_equilibrium_ev.wait({copy_t_ev});
-  initialize_equilibrium_ev.wait({initialize_macroscopic_variables_ev});
-  initialize_equilibrium_ev.wait({init_obstacle_mask_ev});
-
-} // LBMSolver::initialize
-
-// ======================================================
-// ======================================================
-void LBMSolver::run() {
+  // Simulation settings & parameters
   const size_t nx = params.nx;
   const size_t ny = params.ny;
+  const int nxny = nx * ny;
   int maxIter = params.maxIter;
   int outStep = params.outStep;
   bool outImage = params.outImage;
+  const size_t npop = params.npop;
+  const T uLB = params.uLB;
+  const T ly = params.ly;
+  const T omega = params.omega;
 
-  auto npop = params.npop;
 
-  if (!outImage) {
-    lbm_vars.rhoH = new real_t[nx * ny];
-    lbm_vars.uxH = new real_t[nx * ny];
-    lbm_vars.uyH = new real_t[nx * ny];
-  }
+  // -------------- INIT obstacle mask array
 
-  // temporary variables for reduction purposes (image generation)
+  queue.submit([&](sycl::handler &cgh) {
+    auto obstAcc =
+        lbm_vars.obstacleBuff.template get_access<sycl::access::mode::discard_write>(
+            cgh);
 
-  real_t *max_value = sycl::malloc_shared<real_t>(1, queue);
-  real_t *min_value = sycl::malloc_shared<real_t>(1, queue);
+    cgh.parallel_for(sycl::range<2>{ny, nx},
+                     ObstacleKernel<T, uint8_t>(params, obstAcc));
+  });
 
-  // Initialize Simulation Variables (Obstacle, Macro variables, copy relevant
-  // data H2D )
-  this->initialize();
+  // -------------- INIT MACRO
+  // rho is one everywhere : fill 1
+  const T fillRho = 1.0;
+
+  queue.submit([&](sycl::handler &cgh) {
+    auto rhoAcc =
+        lbm_vars.rho.template get_access<sycl::access::mode::discard_write>(cgh);
+    cgh.fill<T>(rhoAcc, fillRho);
+  });
+
+  // uy is zero everywhere (right here/now only): fill 0
+  const T fillUy = 0.0;
+
+  queue.submit([&](sycl::handler &cgh) {
+    auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::discard_write>(cgh);
+    cgh.fill<T>(uyAcc, fillUy);
+  });
+
+  // fill ux
+
+  queue.submit([&](sycl::handler &cgh) {
+    auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::discard_write>(cgh);
+
+    cgh.parallel_for(sycl::range<2>{ny, nx}, [=](sycl::id<2> id) {
+      size_t i = id[1]; // along nx
+      size_t j = id[0]; // along ny
+
+      size_t index = i + nx * j;
+
+      uxAcc[index] = uLB * (1.0 + 1e-4 * sycl::sin((T)j / ly * 2 * M_PI));
+    });
+  });
+
+  // -------------- INIT EQ
+  queue.submit([&](sycl::handler &cgh) {
+    auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
+    auto rhoAcc = lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
+
+    auto tAcc =
+        lbm_vars.t.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+    auto vAcc =
+        lbm_vars.v.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+
+    auto finAcc =
+        lbm_vars.fin.template get_access<sycl::access::mode::discard_write>(cgh);
+
+    cgh.parallel_for(
+        sycl::range<2>{ny, nx},
+        InitEquilibrium<T>(params, vAcc, tAcc, uxAcc, rhoAcc, finAcc));
+  });
 
   // time loop
   for (int iTime = 0; iTime <= maxIter; ++iTime) {
 
-    // Right wall: outflow condition.
-    // we only need here to specify distrib. function for velocities
-    // that enter the domain (other that go out, are set by the streaming step)
+    queue.submit([&](sycl::handler &cgh) {
+      auto finAcc =
+          lbm_vars.fin.template get_access<sycl::access::mode::read_write>(cgh);
 
-    border_outflow(params, lbm_vars.fin, queue, border_outflow_ev);
-    if (!iTime) { // First iteration
-      border_outflow_ev.wait({initialize_equilibrium_ev});
-    } else { // >1 Iteration number
-      border_outflow_ev.wait({streaming_ev});
-    }
+      cgh.parallel_for(sycl::range<1>{ny}, Outflow<T>(params, finAcc));
+    });
 
-    // Compute macroscopic variables, density and velocity.
+    // -------------- MACRO
 
-    macroscopic(params, v, lbm_vars.fin, lbm_vars.rho, lbm_vars.ux, lbm_vars.uy,
-                queue, macroscopic_ev);
+    queue.submit([&](sycl::handler &cgh) {
+      auto uxAcc =
+          lbm_vars.ux.template get_access<sycl::access::mode::discard_write>(cgh);
+      auto uyAcc =
+          lbm_vars.uy.template get_access<sycl::access::mode::discard_write>(cgh);
+      auto rhoAcc =
+          lbm_vars.rho.template get_access<sycl::access::mode::discard_write>(cgh);
 
-    macroscopic_ev.wait({border_outflow_ev});
+      auto vAcc =
+          lbm_vars.v.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
 
-    // Left wall: inflow condition.
+      auto finAcc = lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
 
-    border_inflow(params, lbm_vars.fin, lbm_vars.rho, lbm_vars.ux, lbm_vars.uy,
-                  queue, border_inflow_ev);
+      cgh.parallel_for(
+          sycl::range<2>{ny, nx},
+          Macroscopic<T>(params, finAcc, vAcc, uxAcc, uyAcc, rhoAcc));
+    });
 
-    border_inflow_ev.wait({macroscopic_ev});
+    // -------------- Left wall: inflow condition.
 
+    queue.submit([&](sycl::handler &cgh) {
+      auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read_write>(cgh);
+      auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::write>(cgh);
+      auto rhoAcc = lbm_vars.rho.template get_access<sycl::access::mode::write>(cgh);
+      auto finAcc = lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
+
+      cgh.parallel_for(
+          sycl::range<1>{ny},
+          InflowMacro<T>(params, finAcc, uxAcc, uyAcc, rhoAcc));
+    });
+
+    // Output (Image / VTK)
     if (!(iTime % outStep)) {
 
       if (outImage) {
-        prepare_png_output(params, lbm_vars.ux, lbm_vars.uy, lbm_vars.u2,
-                           lbm_vars.img, lbm_vars.imgH, max_value, min_value,
-                           queue, prepare_png_output_ev);
-        prepare_png_output_ev.at(0).wait({border_inflow_ev});
-        prepare_png_output_ev.at(1).wait({border_inflow_ev});
 
-      } // Image output case
-      else {
-        prepare_png_output_ev.emplace_back(
-            queue.memcpy(lbm_vars.uxH, lbm_vars.ux, nx * ny * sizeof(real_t)));
-        prepare_png_output_ev.emplace_back(
-            queue.memcpy(lbm_vars.uyH, lbm_vars.uy, nx * ny * sizeof(real_t)));
-        prepare_png_output_ev.emplace_back(
-            queue.memcpy(lbm_vars.uyH, lbm_vars.uy, nx * ny * sizeof(real_t)));
+        queue.submit([&](sycl::handler &cgh) {
+          auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
+          auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
+          auto u2Acc =
+              lbm_vars.u2.template get_access<sycl::access::mode::discard_write>(cgh);
+
+          cgh.parallel_for(
+              sycl::nd_range<1>{ny * nx, 1},
+              sycl::reduction(
+                  lbm_vars.max, cgh, sycl::maximum<>(),
+                  sycl::property::reduction::initialize_to_identity()),
+              [=](sycl::nd_item<1> item, auto &max_value) {
+                size_t index = item.get_global_id();
+
+                T uX = uxAcc[index];
+                T uY = uyAcc[index];
+
+                T uu2 = sycl::sqrt(uX * uX + uY * uY);
+
+                u2Acc[index] = uu2;
+
+                max_value.combine(uu2);
+              });
+        });
+
+        queue.submit([&](sycl::handler &cgh) {
+          auto u2Acc = lbm_vars.u2.template get_access<sycl::access::mode::read>(cgh);
+
+          cgh.parallel_for(
+              sycl::nd_range<1>{ny * nx, 1},
+              sycl::reduction(
+                  lbm_vars.min, cgh, sycl::minimum<>(),
+                  sycl::property::reduction::initialize_to_identity()),
+              [=](sycl::nd_item<1> item, auto &min_value) {
+                size_t index = item.get_global_id();
+
+                min_value.combine(u2Acc[index]);
+              });
+        });
+
+        queue.submit([&](sycl::handler &cgh) {
+          auto u2Acc = lbm_vars.u2.template get_access<sycl::access::mode::read>(cgh);
+
+          auto imgAcc =
+              lbm_vars.img.template get_access<sycl::access::mode::discard_write>(cgh);
+
+          auto maxAcc = lbm_vars.max.template get_access<sycl::access::mode::read>(cgh);
+          auto minAcc = lbm_vars.min.template get_access<sycl::access::mode::read>(cgh);
+
+          cgh.parallel_for(sycl::range<2>{ny, nx},
+                           ImageCompute<T, unsigned char>(
+                               params, u2Acc, maxAcc, minAcc, imgAcc));
+        });
+
+        queue.submit([&](sycl::handler &cgh) {
+          auto imgAcc = lbm_vars.img.template get_access<sycl::access::mode::read>(cgh);
+          cgh.copy(imgAcc, lbm_vars.imgH);
+        });
+        queue.wait_and_throw();
+
+      }      // Image output case
+      else { // VTK Output case
+        queue.submit([&](sycl::handler &cgh) {
+          auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
+
+          cgh.copy(uxAcc, lbm_vars.uxH);
+        });
+
+        queue.submit([&](sycl::handler &cgh) {
+          auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
+
+          cgh.copy(uyAcc, lbm_vars.uyH);
+        });
+
+        queue.submit([&](sycl::handler &cgh) {
+          auto rhoAcc = lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
+          cgh.copy(rhoAcc, lbm_vars.rhoH);
+        });
       } // VTK output case
     }
 
     // Compute equilibrium.
 
-    equilibrium(params, v, t, lbm_vars.rho, lbm_vars.ux, lbm_vars.uy,
-                lbm_vars.feq, queue, equilibrium_ev);
+    // --------------- EQUILIB
 
-    equilibrium_ev.wait({border_inflow_ev});
+    queue.submit([&](sycl::handler &cgh) {
+      auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
+      auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
+      auto rhoAcc = lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
 
-    update_fin_inflow(params, lbm_vars.feq, lbm_vars.fin, queue,
-                      update_fin_inflow_ev);
+      auto tAcc =
+          lbm_vars.t.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+      auto vAcc =
+          lbm_vars.v.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
 
-    update_fin_inflow_ev.wait({equilibrium_ev});
+      auto feqAcc =
+          lbm_vars.feq.template get_access<sycl::access::mode::discard_write>(cgh);
 
-    // Collision step.
-    compute_collision(params, lbm_vars.fin, lbm_vars.feq, lbm_vars.fout, queue,
-                      compute_collision_ev);
+      cgh.parallel_for(sycl::range<2>{ny, nx},
+                       Equilibrium<T>(params, uxAcc, uyAcc, rhoAcc, vAcc,
+                                           tAcc, feqAcc));
+    });
 
-    compute_collision_ev.wait({update_fin_inflow_ev});
+    // --------------- UPDATE INFLOW
 
-    // Bounce-back condition for obstacle.
-    update_obstacle(params, lbm_vars.fin, lbm_vars.obstacle, lbm_vars.fout,
-                    queue, update_obstacle_ev);
+    queue.submit([&](sycl::handler &cgh) {
+      auto feqAcc = lbm_vars.feq.template get_access<sycl::access::mode::read>(cgh);
+      auto finAcc =
+          lbm_vars.fin.template get_access<sycl::access::mode::read_write>(cgh);
 
-    update_obstacle_ev.wait({compute_collision_ev});
+      cgh.parallel_for(sycl::range<1>{ny},
+                       InflowDistr<T>(params, finAcc, feqAcc));
+    });
 
-    // Streaming step.
+    // --------------- COLLISION
 
-    streaming(params, v, lbm_vars.fout, lbm_vars.fin, queue, streaming_ev);
+    queue.submit([&](sycl::handler &cgh) {
+      auto finAcc = lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
+      auto foutAcc =
+          lbm_vars.fout.template get_access<sycl::access::mode::discard_write>(cgh);
+      auto feqAcc = lbm_vars.feq.template get_access<sycl::access::mode::read>(cgh);
 
-    streaming_ev.wait({update_obstacle_ev});
+      cgh.parallel_for(sycl::range<2>{ny, nx},
+                       Collision<T>(params, finAcc, feqAcc, foutAcc));
+    });
+
+    // --------------- UPDATE OBSTACLE
+
+    queue.submit([&](sycl::handler &cgh) {
+      auto obstAcc =
+          lbm_vars.obstacleBuff.template get_access<sycl::access::mode::read>(cgh);
+      auto finAcc = lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
+      auto foutAcc = lbm_vars.fout.template get_access<sycl::access::mode::write>(cgh);
+
+      cgh.parallel_for(
+          sycl::range<2>{ny, nx},
+          UpdateObstacle<T, uint8_t>(params, finAcc, obstAcc, foutAcc));
+    });
+
+    // --------------- STREAMING
+
+    queue.submit([&](sycl::handler &cgh) {
+      auto vAcc =
+          lbm_vars.v.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+
+      auto foutAcc = lbm_vars.fout.template get_access<sycl::access::mode::read>(cgh);
+      auto finAcc =
+          lbm_vars.fin.template get_access<sycl::access::mode::discard_write>(cgh);
+
+      cgh.parallel_for(sycl::range<2>{ny, nx},
+                       Streaming<T>(params, foutAcc, vAcc, finAcc));
+    });
 
     if (!(iTime % outStep)) {
       if (outImage) {
 #ifdef PROFILE
         COMPUTE_ELAPSED_TIME(prepare_png_output, true, elapsedTime)
 #endif
-        output_png_parallel(iTime, nx, ny, lbm_vars.imgH);
+
+        std::cout << "Output data (PNG) at time " << iTime << "\n";
+
+        // create png image buff
+        std::vector<unsigned char> image;
+        image.resize(nx * ny * 4);
+        image.assign(lbm_vars.imgH, lbm_vars.imgH + (nx * ny * 4));
+
+        std::ostringstream iTimeNum;
+        iTimeNum.width(7);
+        iTimeNum.fill('0');
+        iTimeNum << iTime;
+
+        std::string filename = "vel_gpu_" + iTimeNum.str() + ".png";
+
+        // encode the image
+        unsigned error = lodepng::encode(filename, image, nx, ny);
+
+        // if there's an error, display it
+        if (error)
+          std::cout << "encoder error " << error << ": "
+                    << lodepng_error_text(error) << std::endl;
       } // Image output case
       else {
         output_vtk(iTime);
@@ -217,8 +351,11 @@ void LBMSolver::run() {
     COMPUTE_ELAPSED_TIME(streaming, true, elapsedTime)
 #endif
 
+    // sycl::free(max_value, queue);
+    // sycl::free(min_value, queue);
   } // end for iTime
 
+  // delete[] imgH;
 #ifdef PROFILE
   // PROFILING One Execution Routines
 
@@ -229,94 +366,20 @@ void LBMSolver::run() {
   COMPUTE_ELAPSED_TIME(copy_t, false, elapsedTime);
 #endif
 
-  sycl::free(max_value, queue);
-  sycl::free(min_value, queue);
-
 } // LBMSolver::run
 
 // ======================================================
-// ========= Sequential img Output (deprecated) =========
 // ======================================================
-void LBMSolver::output_png(int iTime) {
-
-  std::cout << "Output data (PNG) at time " << iTime << "\n";
-
-  const int nx = params.nx;
-  const int ny = params.ny;
-
-  real_t *u2 = (real_t *)malloc(nx * ny * sizeof(real_t));
-
-  // compute velocity norm, as well as min and max values
-  real_t min_value =
-      sqrt(lbm_vars.ux[0] * lbm_vars.ux[0] + lbm_vars.uy[0] * lbm_vars.uy[0]);
-  real_t max_value = min_value;
-  for (int j = 0; j < ny; ++j) {
-    for (int i = 0; i < nx; ++i) {
-
-      int index = i + nx * j;
-
-      u2[index] = sqrt(lbm_vars.ux[index] * lbm_vars.ux[index] +
-                       lbm_vars.uy[index] * lbm_vars.uy[index]);
-
-      if (u2[index] < min_value)
-        min_value = u2[index];
-
-      if (u2[index] > max_value)
-        max_value = u2[index];
-
-    } // end for i
-
-  } // end for j
-
-  // create png image buff
-  std::vector<unsigned char> image;
-  image.resize(nx * ny * 4);
-  for (int j = 0; j < ny; ++j) {
-    for (int i = 0; i < nx; ++i) {
-
-      int index = i + nx * j;
-
-      // rescale velocity in 0-255 range
-      unsigned char value = static_cast<unsigned char>(
-          (u2[index] - min_value) / (max_value - min_value) * 255);
-      image[0 + 4 * i + 4 * nx * j] = value;
-      image[1 + 4 * i + 4 * nx * j] = value;
-      image[2 + 4 * i + 4 * nx * j] = value;
-      image[3 + 4 * i + 4 * nx * j] = value;
-    }
-  }
-
-  std::ostringstream iTimeNum;
-  iTimeNum.width(7);
-  iTimeNum.fill('0');
-  iTimeNum << iTime;
-
-  std::string filename = "vel_test_" + iTimeNum.str() + ".png";
-
-  // encode the image
-  unsigned error = lodepng::encode(filename, image, nx, ny);
-
-  // if there's an error, display it
-  if (error)
-    std::cout << "encoder error " << error << ": " << lodepng_error_text(error)
-              << std::endl;
-
-  delete[] u2;
-
-} // LBMSolver::output_png
-
-// ======================================================
-// ======================================================
-void LBMSolver::output_vtk(int iTime) {
+template<typename T> void LBMSolver<T>::output_vtk(int iTime) {
 
   std::cout << "Output data (VTK) at time " << iTime << "\n";
 
   bool useAscii = false; // binary data leads to smaller files
-  saveVTK(lbm_vars.rhoH, lbm_vars.uxH, lbm_vars.uyH, params, useAscii, iTime);
+  saveVTK<T>(lbm_vars.rhoH, lbm_vars.uxH, lbm_vars.uyH, params, useAscii, iTime);
 
 } // LBMSolver::output_vtk
 
-void LBMSolver::printQueueInfo() {
+template<typename T> void LBMSolver<T>::printQueueInfo() {
   std::cout << "----------------------------------------" << std::endl;
   std::cout << "device's name : "
             << queue.get_device().get_info<sycl::info::device::name>()
@@ -326,3 +389,7 @@ void LBMSolver::printQueueInfo() {
             << std::endl;
   std::cout << "----------------------------------------\n" << std::endl;
 }
+
+
+template class LBMSolver<float>;
+template class LBMSolver<double>;

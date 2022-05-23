@@ -22,7 +22,8 @@ target_link_libraries(runLBMSimulation
   lbm::core
   lbm::config
   lbm::lodepng
-  lbm::vtk)
+  lbm::vtk
+  lbm::profiling)
 
 add_sycl_to_target(TARGET runLBMSimulation SOURCES )
 

@@ -3,3 +3,4 @@
 add_subdirectory(config)
 add_subdirectory(writePNG)
 add_subdirectory(writeVTK)
+add_subdirectory(profiling)

@@ -1,12 +1,11 @@
 #pragma once
 
-#include "real_type.h"
 #include "utils/config/ConfigMap.h"
 
 /**
  * LBM Parameters (declaration)
  */
-struct LBMParams {
+template <typename T> struct LBMParams {
 
   //! dimension : 2 or 3
   static const int dim = 2;
@@ -26,41 +25,40 @@ struct LBMParams {
   int ny;
 
   //! physical domain sizes (in lattice units) along X axis
-  double lx;
+  T lx;
 
   //! physical domain sizes (in lattice units) along Y axis
-  double ly;
+  T ly;
 
   // cylinder obstacle (center coordinates, radius)
 
   //! x coordinates of cylinder center
-  double cx;
+  T cx;
 
   //! y coordinates of cylinder center
-  double cy;
+  T cy;
 
   //! cylinder radius
-  double r;
+  T r;
 
   //! initial velocity
-  double uLB;
+  T uLB;
 
   /*
    * fluid parameters
    */
   //! Reynolds number
-  double Re;
+  T Re;
 
   //! viscosity in lattice units
-  double nuLB;
+  T nuLB;
 
   //! relaxation parameter
-  double omega;
+  T omega;
 
   //! setup / initialization
   void setup(const ConfigMap &configMap);
-  void setup(int maxIter, int outputStep, int nx, int ny, double uLB,
-             double Re);
+  void setup(int maxIter, int outputStep, int nx, int ny, T uLB, T Re);
 
   //! print parameters on screen
   void print();

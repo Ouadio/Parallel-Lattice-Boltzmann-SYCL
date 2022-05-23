@@ -3,7 +3,6 @@
 add_library(lbmCore "")
 target_sources(lbmCore PRIVATE
   LBMParams.cpp
-  lbmFlowUtils.cpp
   LBMSolver.cpp)
 
 target_include_directories(lbmCore

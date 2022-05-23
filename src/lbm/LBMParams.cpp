@@ -3,7 +3,7 @@
 
 // ======================================================
 // ======================================================
-void LBMParams::setup(const ConfigMap &configMap) {
+template<typename T> void LBMParams<T>::setup(const ConfigMap &configMap) {
 
   // initialize run parameters
   maxIter = configMap.getInteger("run", "maxIter", 20000);
@@ -14,8 +14,8 @@ void LBMParams::setup(const ConfigMap &configMap) {
   nx = configMap.getInteger("geometry", "nx", 1 << 9);
   ny = configMap.getInteger("geometry", "ny", 1 << 7);
 
-  lx = static_cast<double>(nx) - 1;
-  ly = static_cast<double>(ny) - 1;
+  lx = static_cast<T>(nx) - 1;
+  ly = static_cast<T>(ny) - 1;
 
   // cylinder
   cx = configMap.getFloat("cylinder", "cx", 1.0 * nx / 4);
@@ -39,8 +39,8 @@ void LBMParams::setup(const ConfigMap &configMap) {
 } // LBMParams::setup
 
 // ======================================================
-void LBMParams::setup(int maxIter, int outStep, int nx, int ny, double uLB,
-                      double Re) {
+template<typename T> void LBMParams<T>::setup(int maxIter, int outStep, int nx, int ny, T uLB,
+                      T Re) {
 
   // initialize run parameters
   this->maxIter = maxIter;
@@ -50,8 +50,8 @@ void LBMParams::setup(int maxIter, int outStep, int nx, int ny, double uLB,
   this->nx = nx;
   this->ny = ny;
 
-  lx = static_cast<double>(nx) - 1;
-  ly = static_cast<double>(ny) - 1;
+  lx = static_cast<T>(nx) - 1;
+  ly = static_cast<T>(ny) - 1;
 
   // cylinder
   cx = 1.0 * nx / 4;
@@ -76,7 +76,7 @@ void LBMParams::setup(int maxIter, int outStep, int nx, int ny, double uLB,
 
 // ======================================================
 // ======================================================
-void LBMParams::print() {
+template<typename T> void LBMParams<T>::print() {
 
   printf("##########################\n");
   printf("Simulation run parameters:\n");
@@ -98,3 +98,7 @@ void LBMParams::print() {
   printf("\n");
 
 } // LBMParams::print
+
+
+template class LBMParams<float>;
+template class LBMParams<double>;
