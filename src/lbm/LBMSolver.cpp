@@ -14,9 +14,12 @@
 
 using namespace cl;
 
+template <typename T> class UxFill;
+
 // ======================================================
 // ======================================================
-template<typename T> LBMSolver<T>::LBMSolver(const LBMParams<T> &params, sycl::device device)
+template <typename T>
+LBMSolver<T>::LBMSolver(const LBMParams<T> &params, sycl::device device)
     : params(params), queue{device,
                             [](sycl::exception_list el) {
                               for (auto ex : el) {
@@ -27,7 +30,7 @@ template<typename T> LBMSolver<T>::LBMSolver(const LBMParams<T> &params, sycl::d
 
 // ======================================================
 // ======================================================
-template<typename T> void LBMSolver<T>::run() {
+template <typename T> void LBMSolver<T>::run() {
 
   // Simulation settings & parameters
   const size_t nx = params.nx;
@@ -41,13 +44,12 @@ template<typename T> void LBMSolver<T>::run() {
   const T ly = params.ly;
   const T omega = params.omega;
 
-
   // -------------- INIT obstacle mask array
 
   queue.submit([&](sycl::handler &cgh) {
     auto obstAcc =
-        lbm_vars.obstacleBuff.template get_access<sycl::access::mode::discard_write>(
-            cgh);
+        lbm_vars.obstacleBuff
+            .template get_access<sycl::access::mode::discard_write>(cgh);
 
     cgh.parallel_for(sycl::range<2>{ny, nx},
                      ObstacleKernel<T, uint8_t>(params, obstAcc));
@@ -59,7 +61,8 @@ template<typename T> void LBMSolver<T>::run() {
 
   queue.submit([&](sycl::handler &cgh) {
     auto rhoAcc =
-        lbm_vars.rho.template get_access<sycl::access::mode::discard_write>(cgh);
+        lbm_vars.rho.template get_access<sycl::access::mode::discard_write>(
+            cgh);
     cgh.fill<T>(rhoAcc, fillRho);
   });
 
@@ -67,16 +70,18 @@ template<typename T> void LBMSolver<T>::run() {
   const T fillUy = 0.0;
 
   queue.submit([&](sycl::handler &cgh) {
-    auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::discard_write>(cgh);
+    auto uyAcc =
+        lbm_vars.uy.template get_access<sycl::access::mode::discard_write>(cgh);
     cgh.fill<T>(uyAcc, fillUy);
   });
 
   // fill ux
 
   queue.submit([&](sycl::handler &cgh) {
-    auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::discard_write>(cgh);
+    auto uxAcc =
+        lbm_vars.ux.template get_access<sycl::access::mode::discard_write>(cgh);
 
-    cgh.parallel_for(sycl::range<2>{ny, nx}, [=](sycl::id<2> id) {
+    cgh.parallel_for<UxFill<T>>(sycl::range<2>{ny, nx}, [=](sycl::id<2> id) {
       size_t i = id[1]; // along nx
       size_t j = id[0]; // along ny
 
@@ -89,15 +94,17 @@ template<typename T> void LBMSolver<T>::run() {
   // -------------- INIT EQ
   queue.submit([&](sycl::handler &cgh) {
     auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
-    auto rhoAcc = lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
+    auto rhoAcc =
+        lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
 
-    auto tAcc =
-        lbm_vars.t.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
-    auto vAcc =
-        lbm_vars.v.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+    auto tAcc = lbm_vars.t.template get_access<
+        sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+    auto vAcc = lbm_vars.v.template get_access<
+        sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
 
     auto finAcc =
-        lbm_vars.fin.template get_access<sycl::access::mode::discard_write>(cgh);
+        lbm_vars.fin.template get_access<sycl::access::mode::discard_write>(
+            cgh);
 
     cgh.parallel_for(
         sycl::range<2>{ny, nx},
@@ -118,16 +125,20 @@ template<typename T> void LBMSolver<T>::run() {
 
     queue.submit([&](sycl::handler &cgh) {
       auto uxAcc =
-          lbm_vars.ux.template get_access<sycl::access::mode::discard_write>(cgh);
+          lbm_vars.ux.template get_access<sycl::access::mode::discard_write>(
+              cgh);
       auto uyAcc =
-          lbm_vars.uy.template get_access<sycl::access::mode::discard_write>(cgh);
+          lbm_vars.uy.template get_access<sycl::access::mode::discard_write>(
+              cgh);
       auto rhoAcc =
-          lbm_vars.rho.template get_access<sycl::access::mode::discard_write>(cgh);
+          lbm_vars.rho.template get_access<sycl::access::mode::discard_write>(
+              cgh);
 
-      auto vAcc =
-          lbm_vars.v.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+      auto vAcc = lbm_vars.v.template get_access<
+          sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
 
-      auto finAcc = lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
+      auto finAcc =
+          lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
 
       cgh.parallel_for(
           sycl::range<2>{ny, nx},
@@ -137,26 +148,130 @@ template<typename T> void LBMSolver<T>::run() {
     // -------------- Left wall: inflow condition.
 
     queue.submit([&](sycl::handler &cgh) {
-      auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read_write>(cgh);
-      auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::write>(cgh);
-      auto rhoAcc = lbm_vars.rho.template get_access<sycl::access::mode::write>(cgh);
-      auto finAcc = lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
+      auto uxAcc =
+          lbm_vars.ux.template get_access<sycl::access::mode::read_write>(cgh);
+      auto uyAcc =
+          lbm_vars.uy.template get_access<sycl::access::mode::write>(cgh);
+      auto rhoAcc =
+          lbm_vars.rho.template get_access<sycl::access::mode::write>(cgh);
+      auto finAcc =
+          lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
 
-      cgh.parallel_for(
-          sycl::range<1>{ny},
-          InflowMacro<T>(params, finAcc, uxAcc, uyAcc, rhoAcc));
+      cgh.parallel_for(sycl::range<1>{ny},
+                       InflowMacro<T>(params, finAcc, uxAcc, uyAcc, rhoAcc));
     });
 
     // Output (Image / VTK)
     if (!(iTime % outStep)) {
 
       if (outImage) {
+#ifdef COMPUTECPP
+        // Speed profile
+        queue.submit([&](sycl::handler &cgh) {
+          auto uxAcc =
+              lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
+          auto uyAcc =
+              lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
+
+          // auto imgAcc =
+          auto u2Acc =
+              lbm_vars.u2
+                  .template get_access<sycl::access::mode::discard_write>(cgh);
+
+          cgh.parallel_for(sycl::range<1>{ny * nx},
+                           SpeedCompute<T>(uxAcc, uyAcc, u2Acc));
+        });
+
+        // From scratch implementation of Reduction
+        int group_size = 16;
+        int part_size = group_size * 2;
+        int length = nx * ny;
+        int n_groups = (length + part_size - 1) / (part_size);
+
+        sycl::buffer<T, 1> tempReductionMax{sycl::range<1>(n_groups)};
+        sycl::buffer<T, 1> tempReductionMin{sycl::range<1>(n_groups)};
 
         queue.submit([&](sycl::handler &cgh) {
-          auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
-          auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
           auto u2Acc =
-              lbm_vars.u2.template get_access<sycl::access::mode::discard_write>(cgh);
+              lbm_vars.u2.template get_access<sycl::access::mode::read>(cgh);
+
+          sycl::accessor<T, 1, sycl::access::mode::read_write,
+                         sycl::access::target::local>
+              localU2Max(sycl::range<1>(group_size), cgh);
+          sycl::accessor<T, 1, sycl::access::mode::read_write,
+                         sycl::access::target::local>
+              localU2Min(sycl::range<1>(group_size), cgh);
+
+          auto maxAcc =
+              lbm_vars.max
+                  .template get_access<sycl::access::mode::discard_write>(cgh);
+          auto minAcc =
+              lbm_vars.min
+                  .template get_access<sycl::access::mode::discard_write>(cgh);
+
+          auto tempReductionMaxAcc =
+              tempReductionMax
+                  .template get_access<sycl::access::mode::discard_write>(cgh);
+
+          auto tempReductionMinAcc =
+              tempReductionMin
+                  .template get_access<sycl::access::mode::discard_write>(cgh);
+
+          cgh.parallel_for(sycl::nd_range<1>(n_groups * group_size, group_size),
+                           ReduceMaxMinFirst<T>(u2Acc, tempReductionMaxAcc,
+                                                tempReductionMinAcc, minAcc,
+                                                maxAcc, localU2Max, localU2Min,
+                                                group_size, length));
+        });
+
+        int counter = 1;
+        length = n_groups;
+
+        while (length > 1) {
+
+          n_groups = (length + part_size - 1) / (part_size);
+
+          queue.submit([&](sycl::handler &cgh) {
+            sycl::accessor<T, 1, sycl::access::mode::read_write,
+                           sycl::access::target::local>
+                localU2Max(sycl::range<1>(group_size), cgh);
+            sycl::accessor<T, 1, sycl::access::mode::read_write,
+                           sycl::access::target::local>
+                localU2Min(sycl::range<1>(group_size), cgh);
+
+            auto maxAcc =
+                lbm_vars.max
+                    .template get_access<sycl::access::mode::discard_write>(
+                        cgh);
+            auto minAcc =
+                lbm_vars.min
+                    .template get_access<sycl::access::mode::discard_write>(
+                        cgh);
+
+            auto tempReductionMaxAcc = tempReductionMax.template get_access<
+                sycl::access::mode::discard_read_write>(cgh);
+            auto tempReductionMinAcc = tempReductionMin.template get_access<
+                sycl::access::mode::discard_read_write>(cgh);
+
+            cgh.parallel_for(
+                sycl::nd_range<1>(n_groups * group_size, group_size),
+                ReduceMaxMin<T>(tempReductionMaxAcc, tempReductionMinAcc,
+                                minAcc, maxAcc, localU2Max, localU2Min,
+                                group_size, length));
+          });
+          length = n_groups;
+          n_groups = (length + part_size - 1) / (part_size);
+          counter += 1;
+        }
+#else
+        queue.submit([&](sycl::handler &cgh) {
+          auto uxAcc =
+              lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
+          auto uyAcc =
+              lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
+          auto u2Acc =
+              lbm_vars.u2
+                  .template get_access<sycl::access::mode::discard_write>(cgh);
 
           cgh.parallel_for(
               sycl::nd_range<1>{ny * nx, 1},
@@ -178,7 +293,8 @@ template<typename T> void LBMSolver<T>::run() {
         });
 
         queue.submit([&](sycl::handler &cgh) {
-          auto u2Acc = lbm_vars.u2.template get_access<sycl::access::mode::read>(cgh);
+          auto u2Acc =
+              lbm_vars.u2.template get_access<sycl::access::mode::read>(cgh);
 
           cgh.parallel_for(
               sycl::nd_range<1>{ny * nx, 1},
@@ -191,23 +307,29 @@ template<typename T> void LBMSolver<T>::run() {
                 min_value.combine(u2Acc[index]);
               });
         });
+#endif
 
         queue.submit([&](sycl::handler &cgh) {
-          auto u2Acc = lbm_vars.u2.template get_access<sycl::access::mode::read>(cgh);
+          auto u2Acc =
+              lbm_vars.u2.template get_access<sycl::access::mode::read>(cgh);
 
           auto imgAcc =
-              lbm_vars.img.template get_access<sycl::access::mode::discard_write>(cgh);
+              lbm_vars.img
+                  .template get_access<sycl::access::mode::discard_write>(cgh);
 
-          auto maxAcc = lbm_vars.max.template get_access<sycl::access::mode::read>(cgh);
-          auto minAcc = lbm_vars.min.template get_access<sycl::access::mode::read>(cgh);
+          auto maxAcc =
+              lbm_vars.max.template get_access<sycl::access::mode::read>(cgh);
+          auto minAcc =
+              lbm_vars.min.template get_access<sycl::access::mode::read>(cgh);
 
           cgh.parallel_for(sycl::range<2>{ny, nx},
-                           ImageCompute<T, unsigned char>(
-                               params, u2Acc, maxAcc, minAcc, imgAcc));
+                           ImageCompute<T, unsigned char>(params, u2Acc, maxAcc,
+                                                          minAcc, imgAcc));
         });
 
         queue.submit([&](sycl::handler &cgh) {
-          auto imgAcc = lbm_vars.img.template get_access<sycl::access::mode::read>(cgh);
+          auto imgAcc =
+              lbm_vars.img.template get_access<sycl::access::mode::read>(cgh);
           cgh.copy(imgAcc, lbm_vars.imgH);
         });
         queue.wait_and_throw();
@@ -215,19 +337,22 @@ template<typename T> void LBMSolver<T>::run() {
       }      // Image output case
       else { // VTK Output case
         queue.submit([&](sycl::handler &cgh) {
-          auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
+          auto uxAcc =
+              lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
 
           cgh.copy(uxAcc, lbm_vars.uxH);
         });
 
         queue.submit([&](sycl::handler &cgh) {
-          auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
+          auto uyAcc =
+              lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
 
           cgh.copy(uyAcc, lbm_vars.uyH);
         });
 
         queue.submit([&](sycl::handler &cgh) {
-          auto rhoAcc = lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
+          auto rhoAcc =
+              lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
           cgh.copy(rhoAcc, lbm_vars.rhoH);
         });
       } // VTK output case
@@ -238,27 +363,32 @@ template<typename T> void LBMSolver<T>::run() {
     // --------------- EQUILIB
 
     queue.submit([&](sycl::handler &cgh) {
-      auto uxAcc = lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
-      auto uyAcc = lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
-      auto rhoAcc = lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
+      auto uxAcc =
+          lbm_vars.ux.template get_access<sycl::access::mode::read>(cgh);
+      auto uyAcc =
+          lbm_vars.uy.template get_access<sycl::access::mode::read>(cgh);
+      auto rhoAcc =
+          lbm_vars.rho.template get_access<sycl::access::mode::read>(cgh);
 
-      auto tAcc =
-          lbm_vars.t.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
-      auto vAcc =
-          lbm_vars.v.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+      auto tAcc = lbm_vars.t.template get_access<
+          sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+      auto vAcc = lbm_vars.v.template get_access<
+          sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
 
       auto feqAcc =
-          lbm_vars.feq.template get_access<sycl::access::mode::discard_write>(cgh);
+          lbm_vars.feq.template get_access<sycl::access::mode::discard_write>(
+              cgh);
 
-      cgh.parallel_for(sycl::range<2>{ny, nx},
-                       Equilibrium<T>(params, uxAcc, uyAcc, rhoAcc, vAcc,
-                                           tAcc, feqAcc));
+      cgh.parallel_for(
+          sycl::range<2>{ny, nx},
+          Equilibrium<T>(params, uxAcc, uyAcc, rhoAcc, vAcc, tAcc, feqAcc));
     });
 
     // --------------- UPDATE INFLOW
 
     queue.submit([&](sycl::handler &cgh) {
-      auto feqAcc = lbm_vars.feq.template get_access<sycl::access::mode::read>(cgh);
+      auto feqAcc =
+          lbm_vars.feq.template get_access<sycl::access::mode::read>(cgh);
       auto finAcc =
           lbm_vars.fin.template get_access<sycl::access::mode::read_write>(cgh);
 
@@ -269,10 +399,13 @@ template<typename T> void LBMSolver<T>::run() {
     // --------------- COLLISION
 
     queue.submit([&](sycl::handler &cgh) {
-      auto finAcc = lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
+      auto finAcc =
+          lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
       auto foutAcc =
-          lbm_vars.fout.template get_access<sycl::access::mode::discard_write>(cgh);
-      auto feqAcc = lbm_vars.feq.template get_access<sycl::access::mode::read>(cgh);
+          lbm_vars.fout.template get_access<sycl::access::mode::discard_write>(
+              cgh);
+      auto feqAcc =
+          lbm_vars.feq.template get_access<sycl::access::mode::read>(cgh);
 
       cgh.parallel_for(sycl::range<2>{ny, nx},
                        Collision<T>(params, finAcc, feqAcc, foutAcc));
@@ -282,9 +415,12 @@ template<typename T> void LBMSolver<T>::run() {
 
     queue.submit([&](sycl::handler &cgh) {
       auto obstAcc =
-          lbm_vars.obstacleBuff.template get_access<sycl::access::mode::read>(cgh);
-      auto finAcc = lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
-      auto foutAcc = lbm_vars.fout.template get_access<sycl::access::mode::write>(cgh);
+          lbm_vars.obstacleBuff.template get_access<sycl::access::mode::read>(
+              cgh);
+      auto finAcc =
+          lbm_vars.fin.template get_access<sycl::access::mode::read>(cgh);
+      auto foutAcc =
+          lbm_vars.fout.template get_access<sycl::access::mode::write>(cgh);
 
       cgh.parallel_for(
           sycl::range<2>{ny, nx},
@@ -294,12 +430,14 @@ template<typename T> void LBMSolver<T>::run() {
     // --------------- STREAMING
 
     queue.submit([&](sycl::handler &cgh) {
-      auto vAcc =
-          lbm_vars.v.template get_access<sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
+      auto vAcc = lbm_vars.v.template get_access<
+          sycl::access::mode::read, sycl::access::target::constant_buffer>(cgh);
 
-      auto foutAcc = lbm_vars.fout.template get_access<sycl::access::mode::read>(cgh);
+      auto foutAcc =
+          lbm_vars.fout.template get_access<sycl::access::mode::read>(cgh);
       auto finAcc =
-          lbm_vars.fin.template get_access<sycl::access::mode::discard_write>(cgh);
+          lbm_vars.fin.template get_access<sycl::access::mode::discard_write>(
+              cgh);
 
       cgh.parallel_for(sycl::range<2>{ny, nx},
                        Streaming<T>(params, foutAcc, vAcc, finAcc));
@@ -370,26 +508,27 @@ template<typename T> void LBMSolver<T>::run() {
 
 // ======================================================
 // ======================================================
-template<typename T> void LBMSolver<T>::output_vtk(int iTime) {
+template <typename T> void LBMSolver<T>::output_vtk(int iTime) {
 
   std::cout << "Output data (VTK) at time " << iTime << "\n";
 
   bool useAscii = false; // binary data leads to smaller files
-  saveVTK<T>(lbm_vars.rhoH, lbm_vars.uxH, lbm_vars.uyH, params, useAscii, iTime);
+  saveVTK<T>(lbm_vars.rhoH, lbm_vars.uxH, lbm_vars.uyH, params, useAscii,
+             iTime);
 
 } // LBMSolver::output_vtk
 
-template<typename T> void LBMSolver<T>::printQueueInfo() {
+template <typename T> void LBMSolver<T>::printQueueInfo() {
   std::cout << "----------------------------------------" << std::endl;
   std::cout << "device's name : "
-            << queue.get_device().get_info<sycl::info::device::name>()
+            << queue.get_device().template get_info<sycl::info::device::name>()
             << std::endl;
-  std::cout << "device's vendor : "
-            << queue.get_device().get_info<sycl::info::device::vendor>()
-            << std::endl;
+  std::cout
+      << "device's vendor : "
+      << queue.get_device().template get_info<sycl::info::device::vendor>()
+      << std::endl;
   std::cout << "----------------------------------------\n" << std::endl;
 }
-
 
 template class LBMSolver<float>;
 template class LBMSolver<double>;

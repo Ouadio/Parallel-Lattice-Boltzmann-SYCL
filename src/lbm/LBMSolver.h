@@ -15,6 +15,26 @@ using namespace cl;
   elapsedTimeMap[name] / countMap[name]
 #endif
 
+// Accessors targets (global_buffer deprecated in DPCPP SYCL 2020)
+#ifdef COMPUTECPP
+#define DEVICE_TARGET sycl::access::target::global_buffer
+#else
+#define DEVICE_TARGET sycl::access::target::device
+#endif
+
+// Accessors
+#define SyclReadWriteAccessor(T)                                               \
+  sycl::accessor<T, 1, sycl::access::mode::read_write, DEVICE_TARGET>
+#define SyclDiscardReadWriteAccessor(T)                                        \
+  sycl::accessor<T, 1, sycl::access::mode::discard_read_write, DEVICE_TARGET>
+#define SyclDiscardWriteAccessor(T)                                            \
+  sycl::accessor<T, 1, sycl::access::mode::discard_write, DEVICE_TARGET>
+#define SyclWriteAccessor(T)                                                   \
+  sycl::accessor<T, 1, sycl::access::mode::write, DEVICE_TARGET>
+#define SyclReadAccessor(T)                                                    \
+  sycl::accessor<T, 1, sycl::access::mode::read, DEVICE_TARGET>
+
+// Wrapper struct for LBM variables (D2Q9)
 template <typename T> struct LBMVariables {
 public:
   // Distribution functions
@@ -33,33 +53,31 @@ public:
   T *uxH{nullptr};
   T *uyH{nullptr};
 
-  sycl::buffer<T, 1> fout{nullptr, sycl::range<1>{0}};
+  sycl::buffer<T, 1> fout{sycl::range<1>{1}};
 
-  sycl::buffer<T, 1> fin{nullptr, sycl::range<1>{0}};
-  sycl::buffer<T, 1> feq{nullptr, sycl::range<1>{0}};
+  sycl::buffer<T, 1> fin{sycl::range<1>{1}};
+  sycl::buffer<T, 1> feq{sycl::range<1>{1}};
 
   // Constant buffers
 
-  sycl::buffer<T, 1> t{nullptr, sycl::range<1>{0}};
-  sycl::buffer<T, 1> v{nullptr, sycl::range<1>{0}};
+  sycl::buffer<T, 1> t{sycl::range<1>{1}};
+  sycl::buffer<T, 1> v{sycl::range<1>{1}};
 
   // Variables Buffers
-  sycl::buffer<uint8_t, 1> obstacleBuff{nullptr, sycl::range<1>{0}};
+  sycl::buffer<uint8_t, 1> obstacleBuff{sycl::range<1>{1}};
 
-  sycl::buffer<T, 1> rho{nullptr, sycl::range<1>{0}};
-  sycl::buffer<T, 1> ux{nullptr, sycl::range<1>{0}};
-  sycl::buffer<T, 1> uy{nullptr, sycl::range<1>{0}};
+  sycl::buffer<T, 1> rho{sycl::range<1>{1}};
+  sycl::buffer<T, 1> ux{sycl::range<1>{1}};
+  sycl::buffer<T, 1> uy{sycl::range<1>{1}};
 
-  sycl::buffer<T, 1> u2{nullptr, sycl::range<1>{0}};
-  sycl::buffer<unsigned char, 1> img{nullptr, sycl::range<1>{0}};
-  sycl::buffer<T, 1> max{nullptr, sycl::range<1>{0}};
-  sycl::buffer<T, 1> min{nullptr, sycl::range<1>{0}};
+  sycl::buffer<T, 1> u2{sycl::range<1>{1}};
+  sycl::buffer<unsigned char, 1> img{sycl::range<1>{1}};
+  sycl::buffer<T, 1> max{sycl::range<1>{1}};
+  sycl::buffer<T, 1> min{sycl::range<1>{1}};
 
   unsigned char *imgH{nullptr};
 
   bool outImage;
-  // obstacle
-  // sycl::buffer<uint8_t, 1> obstacleBuff{nullptr, sycl::range<1>{0}};
 
   LBMVariables(const LBMParams<T> &params) {
 
@@ -128,7 +146,7 @@ public:
  * 8   5   2
  *
  */
-template<typename T> class LBMSolver {
+template <typename T> class LBMSolver {
 
 public:
   LBMSolver(const LBMParams<T> &params, sycl::device device);
@@ -213,11 +231,10 @@ public:
 // Kernels
 
 template <typename T, typename I> struct ObstacleKernel {
-  using syclDiscardWriteAccessor =
-      sycl::accessor<I, 1, sycl::access::mode::discard_write>;
 
 public:
-  ObstacleKernel(const LBMParams<T> &params, syclDiscardWriteAccessor obstacleAcc)
+  ObstacleKernel(const LBMParams<T> &params,
+                 SyclDiscardWriteAccessor(I) obstacleAcc)
       : obsAcc_{obstacleAcc} {
     nx_ = params.nx;
     cx_ = params.cx;
@@ -239,7 +256,7 @@ public:
   }
 
 private:
-  syclDiscardWriteAccessor obsAcc_;
+  SyclDiscardWriteAccessor(I) obsAcc_;
   T nx_;
   T cx_;
   T cy_;
@@ -247,18 +264,16 @@ private:
 };
 
 template <typename T> struct InitEquilibrium {
-  using syclDiscardWriteAccessor =
-      sycl::accessor<T, 1, sycl::access::mode::discard_write>;
 
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
   using syclConstReadAccessor =
       sycl::accessor<T, 1, sycl::access::mode::read,
                      sycl::access::target::constant_buffer>;
 
 public:
   InitEquilibrium(const LBMParams<T> &params, syclConstReadAccessor vAcc,
-                  syclConstReadAccessor tAcc, syclReadAccessor uxAcc,
-                  syclReadAccessor rhoAcc, syclDiscardWriteAccessor finAcc)
+                  syclConstReadAccessor tAcc, SyclReadAccessor(T) uxAcc,
+                  SyclReadAccessor(T) rhoAcc,
+                  SyclDiscardWriteAccessor(T) finAcc)
       : vAcc_{vAcc}, tAcc_{tAcc}, uxAcc_{uxAcc}, rhoAcc_{rhoAcc}, finAcc_{
                                                                       finAcc} {
     nx_ = params.nx;
@@ -285,11 +300,11 @@ public:
   }
 
 private:
-  syclReadAccessor uxAcc_;
-  syclReadAccessor rhoAcc_;
+  SyclReadAccessor(T) uxAcc_;
+  SyclReadAccessor(T) rhoAcc_;
   syclConstReadAccessor vAcc_;
   syclConstReadAccessor tAcc_;
-  syclDiscardWriteAccessor finAcc_;
+  SyclDiscardWriteAccessor(T) finAcc_;
 
   size_t nx_;
   size_t ny_;
@@ -298,16 +313,13 @@ private:
 
 template <typename T> struct Outflow {
 
-  using syclReadWriteAccessor =
-      sycl::accessor<T, 1, sycl::access::mode::read_write>;
-
 public:
-  Outflow(LBMParams<T> params, syclReadWriteAccessor finAcc)
+  Outflow(LBMParams<T> params, SyclReadWriteAccessor(T) finAcc)
       : nx_{params.nx}, nxny_{params.nx * params.ny}, finAcc_{finAcc} {}
 
   void operator()(sycl::id<1> j) const {
-    int index1 = nx_ - 1 + nx_ * j;
-    int index2 = nx_ - 2 + nx_ * j;
+    int index1 = nx_ - 1 + nx_ * j.get(0);
+    int index2 = nx_ - 2 + nx_ * j.get(0);
 
     finAcc_[index1 + 6 * nxny_] = finAcc_[index2 + 6 * nxny_];
     finAcc_[index1 + 7 * nxny_] = finAcc_[index2 + 7 * nxny_];
@@ -315,24 +327,22 @@ public:
   }
 
 private:
-  syclReadWriteAccessor finAcc_;
+  SyclReadWriteAccessor(T) finAcc_;
   int nxny_;
   int nx_;
 };
 
 template <typename T> struct Macroscopic {
-  using syclDiscardWriteAccessor =
-      sycl::accessor<T, 1, sycl::access::mode::discard_write>;
 
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
   using syclConstReadAccessor =
       sycl::accessor<T, 1, sycl::access::mode::read,
                      sycl::access::target::constant_buffer>;
 
 public:
-  Macroscopic(LBMParams<T> params, syclReadAccessor finAcc,
-              syclConstReadAccessor vAcc, syclDiscardWriteAccessor uxAcc,
-              syclDiscardWriteAccessor uyAcc, syclDiscardWriteAccessor rhoAcc)
+  Macroscopic(LBMParams<T> params, SyclReadAccessor(T) finAcc,
+              syclConstReadAccessor vAcc, SyclDiscardWriteAccessor(T) uxAcc,
+              SyclDiscardWriteAccessor(T) uyAcc,
+              SyclDiscardWriteAccessor(T) rhoAcc)
       : nx_{params.nx}, nxny_{params.nx * params.ny}, npop_{params.npop},
         finAcc_{finAcc}, vAcc_{vAcc}, uxAcc_{uxAcc}, uyAcc_{uyAcc},
         rhoAcc_{rhoAcc} {}
@@ -367,10 +377,10 @@ public:
   }
 
 private:
-  syclDiscardWriteAccessor uxAcc_;
-  syclDiscardWriteAccessor uyAcc_;
-  syclDiscardWriteAccessor rhoAcc_;
-  syclReadAccessor finAcc_;
+  SyclDiscardWriteAccessor(T) uxAcc_;
+  SyclDiscardWriteAccessor(T) uyAcc_;
+  SyclDiscardWriteAccessor(T) rhoAcc_;
+  SyclReadAccessor(T) finAcc_;
   syclConstReadAccessor vAcc_;
 
   int npop_;
@@ -380,23 +390,19 @@ private:
 
 template <typename T> class InflowMacro {
 
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
-  using syclWriteAccessor = sycl::accessor<T, 1, sycl::access::mode::write>;
-  using syclReadWriteAccessor =
-      sycl::accessor<T, 1, sycl::access::mode::read_write>;
-
 public:
-  InflowMacro(LBMParams<T> params, syclReadAccessor finAcc,
-              syclReadWriteAccessor uxAcc, syclWriteAccessor uyAcc,
-              syclWriteAccessor rhoAcc)
+  InflowMacro(LBMParams<T> params, SyclReadAccessor(T) finAcc,
+              SyclReadWriteAccessor(T) uxAcc, SyclWriteAccessor(T) uyAcc,
+              SyclWriteAccessor(T) rhoAcc)
       : nx_{params.nx}, ly_{params.ly}, nxny_{params.nx * params.ny},
         uLB_{params.uLB}, finAcc_{finAcc}, uxAcc_{uxAcc}, uyAcc_{uyAcc},
         rhoAcc_{rhoAcc} {}
 
   void operator()(sycl::id<1> j) const {
-    int index = nx_ * j;
+    int index = nx_ * j.get(0);
     // Compute velocity (for ux only, since uy = 0 everywhere)
-    uxAcc_[index] = uLB_ * (1.0 + 1e-4 * sycl::sin((T)j / ly_ * 2 * M_PI));
+    uxAcc_[index] =
+        uLB_ * (1.0 + 1e-4 * sycl::sin((T)j.get(0) / ly_ * 2 * M_PI));
     uyAcc_[index] = 0.f;
     rhoAcc_[index] =
         1 / (1 - uxAcc_[index]) *
@@ -407,10 +413,10 @@ public:
   }
 
 private:
-  syclReadAccessor finAcc_;
-  syclWriteAccessor uyAcc_;
-  syclWriteAccessor rhoAcc_;
-  syclReadWriteAccessor uxAcc_;
+  SyclReadAccessor(T) finAcc_;
+  SyclWriteAccessor(T) uyAcc_;
+  SyclWriteAccessor(T) rhoAcc_;
+  SyclReadWriteAccessor(T) uxAcc_;
   T uLB_;
   int nx_;
   T ly_;
@@ -419,18 +425,15 @@ private:
 
 template <typename T> class Equilibrium {
 
-  using syclDiscardWriteAccessor =
-      sycl::accessor<T, 1, sycl::access::mode::discard_write>;
-
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
   using syclConstReadAccessor =
       sycl::accessor<T, 1, sycl::access::mode::read,
                      sycl::access::target::constant_buffer>;
 
 public:
-  Equilibrium(LBMParams<T> params, syclReadAccessor uxAcc, syclReadAccessor uyAcc,
-              syclReadAccessor rhoAcc, syclConstReadAccessor vAcc,
-              syclConstReadAccessor tAcc, syclDiscardWriteAccessor feqAcc)
+  Equilibrium(LBMParams<T> params, SyclReadAccessor(T) uxAcc,
+              SyclReadAccessor(T) uyAcc, SyclReadAccessor(T) rhoAcc,
+              syclConstReadAccessor vAcc, syclConstReadAccessor tAcc,
+              SyclDiscardWriteAccessor(T) feqAcc)
       : nx_{params.nx}, nxny_{params.nx * params.ny}, npop_{params.npop},
         uxAcc_{uxAcc}, uyAcc_{uyAcc}, rhoAcc_{rhoAcc}, vAcc_{vAcc}, tAcc_{tAcc},
         feqAcc_{feqAcc} {}
@@ -442,12 +445,11 @@ public:
 
     int index = i + nx_ * j;
 
-    T usqr =
-        3.0 / 2 *
-        (uxAcc_[index] * uxAcc_[index] + uyAcc_[index] * uyAcc_[index]);
+    T usqr = 3.0 / 2 *
+             (uxAcc_[index] * uxAcc_[index] + uyAcc_[index] * uyAcc_[index]);
     for (int ipop = 0; ipop < npop_; ++ipop) {
       T cu = 3 * (vAcc_[ipop * 2] * uxAcc_[index] +
-                       vAcc_[ipop * 2 + 1] * uyAcc_[index]);
+                  vAcc_[ipop * 2 + 1] * uyAcc_[index]);
 
       feqAcc_[index + ipop * nxny_] =
           rhoAcc_[index] * tAcc_[ipop] * (1 + cu + 0.5 * cu * cu - usqr);
@@ -455,14 +457,14 @@ public:
   }
 
 private:
-  syclReadAccessor uxAcc_;
-  syclReadAccessor uyAcc_;
-  syclReadAccessor rhoAcc_;
+  SyclReadAccessor(T) uxAcc_;
+  SyclReadAccessor(T) uyAcc_;
+  SyclReadAccessor(T) rhoAcc_;
 
   syclConstReadAccessor vAcc_;
   syclConstReadAccessor tAcc_;
 
-  syclDiscardWriteAccessor feqAcc_;
+  SyclDiscardWriteAccessor(T) feqAcc_;
 
   int nx_;
   int nxny_;
@@ -471,18 +473,14 @@ private:
 
 template <typename T> class InflowDistr {
 
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
-  using syclReadWriteAccessor =
-      sycl::accessor<T, 1, sycl::access::mode::read_write>;
-
 public:
-  InflowDistr(LBMParams<T> params, syclReadWriteAccessor finAcc,
-              syclReadAccessor feqAcc)
+  InflowDistr(LBMParams<T> params, SyclReadWriteAccessor(T) finAcc,
+              SyclReadAccessor(T) feqAcc)
       : nx_{params.nx}, nxny_{params.nx * params.ny}, finAcc_{finAcc},
         feqAcc_{feqAcc} {}
 
   void operator()(sycl::id<1> j) const {
-    int index = nx_ * j;
+    int index = nx_ * j.get(0);
 
     finAcc_[index + 0 * nxny_] = feqAcc_[index + 0 * nxny_] +
                                  finAcc_[index + 8 * nxny_] -
@@ -496,8 +494,8 @@ public:
   }
 
 private:
-  syclReadAccessor feqAcc_;
-  syclReadWriteAccessor finAcc_;
+  SyclReadAccessor(T) feqAcc_;
+  SyclReadWriteAccessor(T) finAcc_;
 
   int nx_;
   int nxny_;
@@ -505,13 +503,9 @@ private:
 
 template <typename T> class Collision {
 
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
-  using syclDiscardWriteAccessor =
-      sycl::accessor<T, 1, sycl::access::mode::discard_write>;
-
 public:
-  Collision(LBMParams<T> params, syclReadAccessor finAcc, syclReadAccessor feqAcc,
-            syclDiscardWriteAccessor foutAcc)
+  Collision(LBMParams<T> params, SyclReadAccessor(T) finAcc,
+            SyclReadAccessor(T) feqAcc, SyclDiscardWriteAccessor(T) foutAcc)
       : nx_{params.nx}, nxny_{params.nx * params.ny}, npop_{params.npop},
         omega_{params.omega}, finAcc_{finAcc}, feqAcc_{feqAcc}, foutAcc_{
                                                                     foutAcc} {}
@@ -531,9 +525,9 @@ public:
   }
 
 private:
-  syclReadAccessor finAcc_;
-  syclReadAccessor feqAcc_;
-  syclDiscardWriteAccessor foutAcc_;
+  SyclReadAccessor(T) finAcc_;
+  SyclReadAccessor(T) feqAcc_;
+  SyclDiscardWriteAccessor(T) foutAcc_;
 
   int nx_;
   int nxny_;
@@ -543,13 +537,9 @@ private:
 
 template <typename T, typename I> class UpdateObstacle {
 
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
-  using syclIReadAccessor = sycl::accessor<I, 1, sycl::access::mode::read>;
-  using syclWriteAccessor = sycl::accessor<T, 1, sycl::access::mode::write>;
-
 public:
-  UpdateObstacle(LBMParams<T> params, syclReadAccessor finAcc,
-                 syclIReadAccessor obstAcc, syclWriteAccessor foutAcc)
+  UpdateObstacle(LBMParams<T> params, SyclReadAccessor(T) finAcc,
+                 SyclReadAccessor(I) obstAcc, SyclWriteAccessor(T) foutAcc)
       : nx_{params.nx}, nxny_{params.nx * params.ny}, npop_{params.npop},
         finAcc_{finAcc}, obstAcc_{obstAcc}, foutAcc_{foutAcc} {}
 
@@ -572,9 +562,9 @@ public:
   }
 
 private:
-  syclReadAccessor finAcc_;
-  syclIReadAccessor obstAcc_;
-  syclWriteAccessor foutAcc_;
+  SyclReadAccessor(T) finAcc_;
+  SyclReadAccessor(I) obstAcc_;
+  SyclWriteAccessor(T) foutAcc_;
 
   int nx_;
   int nxny_;
@@ -583,16 +573,13 @@ private:
 
 template <typename T> class Streaming {
 
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
-  using syclDiscardWriteAccessor =
-      sycl::accessor<T, 1, sycl::access::mode::discard_write>;
   using syclConstReadAccessor =
       sycl::accessor<T, 1, sycl::access::mode::read,
                      sycl::access::target::constant_buffer>;
 
 public:
-  Streaming(LBMParams<T> params, syclReadAccessor foutAcc,
-            syclConstReadAccessor vAcc, syclDiscardWriteAccessor finAcc)
+  Streaming(LBMParams<T> params, SyclReadAccessor(T) foutAcc,
+            syclConstReadAccessor vAcc, SyclDiscardWriteAccessor(T) finAcc)
       : nx_{params.nx}, ny_{params.ny}, nxny_{params.nx * params.ny},
         npop_{params.npop}, foutAcc_{foutAcc}, vAcc_{vAcc}, finAcc_{finAcc} {}
 
@@ -627,8 +614,8 @@ public:
   }
 
 private:
-  syclReadAccessor foutAcc_;
-  syclDiscardWriteAccessor finAcc_;
+  SyclReadAccessor(T) foutAcc_;
+  SyclDiscardWriteAccessor(T) finAcc_;
   syclConstReadAccessor vAcc_;
 
   int nx_;
@@ -638,14 +625,11 @@ private:
 };
 
 template <typename T, typename I> class ImageCompute {
-  using syclReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read>;
-  using syclDiscardWriteAccessor =
-      sycl::accessor<I, 1, sycl::access::mode::discard_write>;
 
 public:
-  ImageCompute(LBMParams<T> params, syclReadAccessor u2Acc,
-               syclReadAccessor maxAcc, syclReadAccessor minAcc,
-               syclDiscardWriteAccessor imgAcc)
+  ImageCompute(LBMParams<T> params, SyclReadAccessor(T) u2Acc,
+               SyclReadAccessor(T) maxAcc, SyclReadAccessor(T) minAcc,
+               SyclDiscardWriteAccessor(I) imgAcc)
       : nx_{params.nx}, u2Acc_{u2Acc}, maxAcc_{maxAcc}, minAcc_{minAcc},
         imgAcc_{imgAcc} {}
 
@@ -666,10 +650,177 @@ public:
   }
 
 private:
-  syclReadAccessor u2Acc_;
-  syclReadAccessor maxAcc_;
-  syclReadAccessor minAcc_;
-  syclDiscardWriteAccessor imgAcc_;
+  SyclReadAccessor(T) u2Acc_;
+  SyclReadAccessor(T) maxAcc_;
+  SyclReadAccessor(T) minAcc_;
+  SyclDiscardWriteAccessor(I) imgAcc_;
 
   int nx_;
+};
+
+template <typename T> class ReduceMaxMinFirst {
+
+  using syclLocalReadWriteAccessor =
+      sycl::accessor<T, 1, sycl::access::mode::read_write,
+                     sycl::access::target::local>;
+
+public:
+  ReduceMaxMinFirst(SyclReadAccessor(T) u2Acc,
+                    SyclDiscardWriteAccessor(T) writeRedMaxAcc,
+                    SyclDiscardWriteAccessor(T) writeRedMinAcc,
+                    SyclDiscardWriteAccessor(T) minAcc,
+                    SyclDiscardWriteAccessor(T) maxAcc,
+                    syclLocalReadWriteAccessor localMaxAcc,
+                    syclLocalReadWriteAccessor localMinAcc, int group_size,
+                    int length)
+      : u2Acc_{u2Acc}, redMaxAcc_{writeRedMaxAcc}, redMinAcc_{writeRedMinAcc},
+        minAcc_{minAcc}, maxAcc_{maxAcc}, localMaxAcc_{localMaxAcc},
+        localMinAcc_{localMinAcc}, group_size_{group_size}, length_{length} {}
+
+  void operator()(sycl::nd_item<1> item) {
+    int local_id = item.get_local_linear_id();
+    int global_id = item.get_global_linear_id();
+
+    localMaxAcc_[local_id] = std::numeric_limits<T>::min();
+    localMinAcc_[local_id] = std::numeric_limits<T>::max();
+
+    if (2 * global_id < length_) {
+      if (u2Acc_[2 * global_id] < u2Acc_[2 * global_id + 1]) {
+        localMaxAcc_[local_id] = u2Acc_[2 * global_id + 1];
+        localMinAcc_[local_id] = u2Acc_[2 * global_id];
+      } else {
+        localMaxAcc_[local_id] = u2Acc_[2 * global_id];
+        localMinAcc_[local_id] = u2Acc_[2 * global_id + 1];
+      }
+    }
+
+    item.barrier(sycl::access::fence_space::local_space);
+
+    for (int stride = 1; stride < group_size_; stride *= 2) {
+      auto idx = 2 * stride * local_id;
+      if (idx < group_size_) {
+        localMaxAcc_[idx] = localMaxAcc_[idx] < localMaxAcc_[idx + stride]
+                                ? localMaxAcc_[idx + stride]
+                                : localMaxAcc_[idx];
+        localMinAcc_[idx] = localMinAcc_[idx] < localMinAcc_[idx + stride]
+                                ? localMinAcc_[idx]
+                                : localMinAcc_[idx + stride];
+      }
+      item.barrier(sycl::access::fence_space::local_space);
+    }
+
+    if (local_id == 0) {
+      redMaxAcc_[item.get_group_linear_id()] = localMaxAcc_[0];
+      redMinAcc_[item.get_group_linear_id()] = localMinAcc_[0];
+      minAcc_[0] = localMinAcc_[0];
+      maxAcc_[0] = localMaxAcc_[0];
+    }
+  }
+
+private:
+  SyclReadAccessor(T) u2Acc_;
+  SyclDiscardWriteAccessor(T) redMaxAcc_;
+  SyclDiscardWriteAccessor(T) redMinAcc_;
+  SyclDiscardWriteAccessor(T) minAcc_;
+  SyclDiscardWriteAccessor(T) maxAcc_;
+  syclLocalReadWriteAccessor localMaxAcc_;
+  syclLocalReadWriteAccessor localMinAcc_;
+  int group_size_;
+  int length_;
+};
+
+template <typename T> class ReduceMaxMin {
+
+  using syclLocalReadWriteAccessor =
+      sycl::accessor<T, 1, sycl::access::mode::read_write,
+                     sycl::access::target::local>;
+
+public:
+  ReduceMaxMin(SyclDiscardReadWriteAccessor(T) redMaxAcc,
+               SyclDiscardReadWriteAccessor(T) redMinAcc,
+               SyclDiscardWriteAccessor(T) minAcc,
+               SyclDiscardWriteAccessor(T) maxAcc,
+               syclLocalReadWriteAccessor localMaxAcc,
+               syclLocalReadWriteAccessor localMinAcc, int group_size,
+               int length)
+      : redMaxAcc_{redMaxAcc}, redMinAcc_{redMinAcc}, minAcc_{minAcc},
+        maxAcc_{maxAcc}, localMaxAcc_{localMaxAcc}, localMinAcc_{localMinAcc},
+        group_size_{group_size}, length_{length} {}
+
+  void operator()(sycl::nd_item<1> item) {
+    int local_id = item.get_local_linear_id();
+    int global_id = item.get_global_linear_id();
+
+    localMaxAcc_[local_id] = std::numeric_limits<T>::min();
+    localMinAcc_[local_id] = std::numeric_limits<T>::max();
+
+    if (2 * global_id < length_) {
+      localMaxAcc_[local_id] =
+          redMaxAcc_[2 * global_id] < redMaxAcc_[2 * global_id + 1]
+              ? redMaxAcc_[2 * global_id + 1]
+              : redMaxAcc_[2 * global_id];
+
+      localMinAcc_[local_id] =
+          redMinAcc_[2 * global_id] < redMinAcc_[2 * global_id + 1]
+              ? redMinAcc_[2 * global_id]
+              : redMinAcc_[2 * global_id + 1];
+    }
+
+    item.barrier(sycl::access::fence_space::local_space);
+
+    for (int stride = 1; stride < group_size_; stride *= 2) {
+      auto idx = 2 * stride * local_id;
+      if (idx < group_size_) {
+        localMaxAcc_[idx] = localMaxAcc_[idx] < localMaxAcc_[idx + stride]
+                                ? localMaxAcc_[idx + stride]
+                                : localMaxAcc_[idx];
+        localMinAcc_[idx] = localMinAcc_[idx] < localMinAcc_[idx + stride]
+                                ? localMinAcc_[idx]
+                                : localMinAcc_[idx + stride];
+      }
+      item.barrier(sycl::access::fence_space::local_space);
+    }
+
+    if (local_id == 0) {
+      redMaxAcc_[item.get_group_linear_id()] = localMaxAcc_[0];
+      redMinAcc_[item.get_group_linear_id()] = localMinAcc_[0];
+      minAcc_[0] = localMinAcc_[0];
+      maxAcc_[0] = localMaxAcc_[0];
+    }
+  }
+
+private:
+  SyclDiscardReadWriteAccessor(T) redMaxAcc_;
+  SyclDiscardReadWriteAccessor(T) redMinAcc_;
+  SyclDiscardWriteAccessor(T) minAcc_;
+  SyclDiscardWriteAccessor(T) maxAcc_;
+  syclLocalReadWriteAccessor localMaxAcc_;
+  syclLocalReadWriteAccessor localMinAcc_;
+  int group_size_;
+  int length_;
+};
+
+template <typename T> class SpeedCompute {
+
+  using syclWriteAccessor =
+      sycl::accessor<T, 1, sycl::access::mode::discard_write, DEVICE_TARGET>;
+
+public:
+  SpeedCompute(SyclReadAccessor(T) uxAcc, SyclReadAccessor(T) uyAcc,
+               syclWriteAccessor u2Acc)
+      : uxAcc_{uxAcc}, uyAcc_{uyAcc}, u2Acc_{u2Acc} {}
+
+  void operator()(sycl::id<1> id) {
+    int index = id.get(0);
+
+    T uX = uxAcc_[index];
+    T uY = uyAcc_[index];
+
+    u2Acc_[index] = sycl::sqrt<T>(uX * uX + uY * uY);
+  }
+
+private:
+  syclWriteAccessor u2Acc_;
+  SyclReadAccessor(T) uxAcc_;
+  SyclReadAccessor(T) uyAcc_;
 };

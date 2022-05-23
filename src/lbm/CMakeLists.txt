@@ -11,10 +11,14 @@ target_include_directories(lbmCore
   ${CMAKE_SOURCE_DIR}/src/utils)
 
 set_target_properties(lbmCore PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${SYCL_INCLUDE_DIRS}")
-set_target_properties(lbmCore PROPERTIES INTERFACE_LINK_LIBRARIES DPCPP::DPCPP )
 
-target_link_libraries(lbmCore PRIVATE DPCPP::DPCPP)
+if(USE_COMPUTECPP)
+  set_target_properties(lbmCore PROPERTIES INTERFACE_LINK_LIBRARIES ComputeCpp::ComputeCpp )
+else()
+  set_target_properties(lbmCore PROPERTIES INTERFACE_LINK_LIBRARIES DPCPP::DPCPP )
+  target_link_libraries(lbmCore PRIVATE DPCPP::DPCPP)
+endif()
 
-add_sycl_to_target(TARGET lbmCore SOURCES )
+add_sycl_to_target(TARGET lbmCore SOURCES)
 
 add_library(lbm::core ALIAS lbmCore)
